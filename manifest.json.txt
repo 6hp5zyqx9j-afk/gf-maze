@@ -1,0 +1,9 @@
+{
+  "name": "月風魔伝 迷路メモ",
+  "short_name": "迷路メモ",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0b0d12",
+  "theme_color": "#0b0d12"
+}

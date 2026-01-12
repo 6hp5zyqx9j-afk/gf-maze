@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>月風魔伝 迷路メモ</title>
+
+  <!-- PWA -->
+  <link rel="manifest" href="./manifest.json">
+  <meta name="theme-color" content="#0b0d12">
+  <!-- iOS: ホーム画面追加向け -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <!-- icon無しでもOK：用意できたら有効化
+  <link rel="apple-touch-icon" href="./icon-192.png">
+  -->
+
+  <style>
+    :root { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+    body { margin: 0; background:#0b0d12; color:#e8eefc; overscroll-behavior: contain; }
+    header { padding: 12px 14px; border-bottom: 1px solid #22283a; display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    header > * { margin: 0; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    select, input, button { background:#141a2a; color:#e8eefc; border:1px solid #2a3350; border-radius:10px; padding:8px 10px; }
+    button { cursor:pointer; }
+    button:hover { filter:brightness(1.08); }
+    main { padding: 14px; display:grid; gap:12px; }
+    #canvasWrap { background:#0f1320; border:1px solid #22283a; border-radius:14px; padding:10px; overflow:auto; -webkit-overflow-scrolling: touch; }
+    canvas { background:#0b0d12; border-radius:10px; touch-action: none; } /* ← iPhoneで指操作するとき必須 */
+    .hint { color:#b8c4e6; font-size: 12px; opacity:.9; }
+    .legend { display:flex; gap:10px; flex-wrap:wrap; }
+    .tag { display:inline-flex; gap:8px; align-items:center; padding:6px 10px; border:1px solid #22283a; border-radius:999px; background:#0f1320; font-size:12px; }
+    .swatch { width:14px; height:14px; border-radius:4px; border:1px solid #00000066; }
+    .split { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-start; }
+    .panel { border:1px solid #22283a; border-radius:14px; padding:12px; background:#0f1320; min-width: 280px; }
+    textarea { width: 100%; min-height: 90px; background:#0b0d12; color:#e8eefc; border:1px solid #22283a; border-radius:10px; padding:10px; }
+  </style>
+</head>
+<body>
+<header>
+  <div class="row">
+    <strong>月風魔伝 迷路メモ</strong>
+    <span class="hint">タップで記録 / Shift+クリック=PC用（iPhoneは右のメモ欄でOK）</span>
+  </div>
+
+  <div class="row">
+    <label class="hint">マップ名</label>
+    <input id="mapName" value="default" />
+    <button id="loadBtn">読込</button>
+    <button id="newBtn">新規</button>
+  </div>
+
+  <div class="row">
+    <label class="hint">ツール</label>
+    <select id="tool">
+      <option value="unknown">未探索</option>
+      <option value="path" selected>通路</option>
+      <option value="wall">壁</option>
+      <option value="entrance">入口</option>
+      <option value="treasure">宝</option>
+      <option value="boss">ボス</option>
+      <option value="stairs">階段</option>
+      <option value="erase">消しゴム（空）</option>
+    </select>
+
+    <label class="hint">サイズ</label>
+    <input id="w" type="number" min="10" max="200" value="40" style="width:80px" />
+    <input id="h" type="number" min="10" max="200" value="30" style="width:80px" />
+    <button id="resizeBtn">適用</button>
+  </div>
+
+  <div class="row">
+    <button id="exportBtn">JSON書出</button>
+    <label class="hint" style="display:inline-flex; gap:8px; align-items:center;">
+      JSON読込 <input id="importFile" type="file" accept="application/json" />
+    </label>
+    <button id="pngBtn">PNG出力</button>
+    <button id="clearBtn">全消去</button>
+  </div>
+</header>
+
+<main>
+  <div class="split">
+    <div id="canvasWrap">
+      <canvas id="cv"></canvas>
+      <div class="hint" style="margin-top:8px; line-height:1.6;">
+        iPhone操作メモ：<br>
+        ・塗る：セルをタップ/ドラッグ<br>
+        ・メモ：右の「選択中セル→メモ」に入力（入力すると自動保存）<br>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="hint" style="margin-bottom:8px;">選択中セル</div>
+      <div id="cellInfo" style="margin-bottom:10px;">(なし)</div>
+
+      <div class="hint" style="margin-bottom:6px;">メモ</div>
+      <textarea id="noteBox" placeholder="例：左に隠し通路っぽい / 敵が強い / 鍵が必要 など"></textarea>
+
+      <div class="row" style="margin-top:10px;">
+        <button id="saveNoteBtn">このセルに保存</button>
+        <button id="deleteNoteBtn">メモ削除</button>
+      </div>
+
+      <hr style="border:none; border-top:1px solid #22283a; margin:14px 0;" />
+
+      <div class="hint" style="margin-bottom:8px;">凡例（白い点＝メモあり）</div>
+      <div class="legend" id="legend"></div>
+
+      <p class="hint" style="margin-top:12px; line-height:1.6;">
+        端末内保存：自動でiPhone内（ブラウザ）に保存されます。<br>
+        念のためバックアップしたい時は「JSON書出」を使ってFilesに保存してください。
+      </p>
+    </div>
+  </div>
+</main>
+
+<script>
+(() => {
+  const colors = {
+    unknown: "#1b2236",
+    path: "#2e7dff",
+    wall: "#111827",
+    entrance: "#22c55e",
+    treasure: "#fbbf24",
+    boss: "#ef4444",
+    stairs: "#a78bfa",
+    empty: "#0b0d12"
+  };
+
+  const labels = {
+    unknown: "未探索",
+    path: "通路",
+    wall: "壁",
+    entrance: "入口",
+    treasure: "宝",
+    boss: "ボス",
+    stairs: "階段",
+    empty: "空"
+  };
+
+  const cv = document.getElementById("cv");
+  const ctx = cv.getContext("2d");
+
+  const toolSel = document.getElementById("tool");
+  const mapNameEl = document.getElementById("mapName");
+  const wEl = document.getElementById("w");
+  const hEl = document.getElementById("h");
+
+  const cellInfo = document.getElementById("cellInfo");
+  const noteBox = document.getElementById("noteBox");
+
+  const legend = document.getElementById("legend");
+  for (const k of ["unknown","path","wall","entrance","treasure","boss","stairs"]) {
+    const d = document.createElement("div");
+    d.className = "tag";
+    const s = document.createElement("span");
+    s.className = "swatch";
+    s.style.background = colors[k];
+    const t = document.createElement("span");
+    t.textContent = labels[k];
+    d.appendChild(s); d.appendChild(t);
+    legend.appendChild(d);
+  }
+
+  const CELL = 22; // 1マスのピクセル
+  let gridW = parseInt(wEl.value, 10);
+  let gridH = parseInt(hEl.value, 10);
+
+  // state
+  // cells: Uint8Array (0 empty, 1 unknown, 2 path, 3 wall, 4 entrance, 5 treasure, 6 boss, 7 stairs)
+  const TYPE = { empty:0, unknown:1, path:2, wall:3, entrance:4, treasure:5, boss:6, stairs:7 };
+  const TYPE_TO_KEY = ["empty","unknown","path","wall","entrance","treasure","boss","stairs"];
+  let cells = new Uint8Array(gridW * gridH);
+  let notes = {}; // "x,y": "text"
+  let selected = null; // {x,y}
+
+  function keyFor(x,y){ return `${x},${y}`; }
+
+  function setCanvasSize(){
+    cv.width = gridW * CELL + 1;
+    cv.height = gridH * CELL + 1;
+  }
+
+  function draw(){
+    ctx.clearRect(0,0,cv.width,cv.height);
+
+    // fill cells
+    for (let y=0; y<gridH; y++){
+      for (let x=0; x<gridW; x++){
+        const t = cells[y*gridW + x];
+        const k = TYPE_TO_KEY[t];
+        ctx.fillStyle = colors[k] ?? colors.empty;
+        ctx.fillRect(x*CELL, y*CELL, CELL, CELL);
+
+        // note marker (small dot)
+        if (notes[keyFor(x,y)]) {
+          ctx.fillStyle = "#ffffff";
+          ctx.globalAlpha = 0.85;
+          ctx.beginPath();
+          ctx.arc(x*CELL + CELL-6, y*CELL + 6, 2.6, 0, Math.PI*2);
+          ctx.fill();
+          ctx.globalAlpha = 1;
+        }
+      }
+    }
+
+    // grid lines
+    ctx.strokeStyle = "rgba(255,255,255,0.06)";
+    ctx.lineWidth = 1;
+    for (let x=0; x<=gridW; x++){
+      ctx.beginPath();
+      ctx.moveTo(x*CELL+0.5, 0.5);
+      ctx.lineTo(x*CELL+0.5, gridH*CELL+0.5);
+      ctx.stroke();
+    }
+    for (let y=0; y<=gridH; y++){
+      ctx.beginPath();
+      ctx.moveTo(0.5, y*CELL+0.5);
+      ctx.lineTo(gridW*CELL+0.5, y*CELL+0.5);
+      ctx.stroke();
+    }
+
+    // selection
+    if (selected){
+      ctx.strokeStyle = "rgba(255,255,255,0.75)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(selected.x*CELL+1, selected.y*CELL+1, CELL-2, CELL-2);
+    }
+  }
+
+  function saveToLocal(){
+    const name = mapNameEl.value.trim() || "default";
+    const payload = {
+      v: 1,
+      name,
+      w: gridW,
+      h: gridH,
+      cells: Array.from(cells),
+      notes
+    };
+    localStorage.setItem("gf_maze_"+name, JSON.stringify(payload));
+  }
+
+  function loadFromLocal(){
+    const name = mapNameEl.value.trim() || "default";
+    const raw = localStorage.getItem("gf_maze_"+name);
+    if (!raw) return false;
+    try {
+      const p = JSON.parse(raw);
+      if (!p || !p.w || !p.h || !p.cells) return false;
+      gridW = p.w; gridH = p.h;
+      wEl.value = gridW; hEl.value = gridH;
+      cells = new Uint8Array(p.cells);
+      notes = p.notes || {};
+      selected = null;
+      noteBox.value = "";
+      setCanvasSize();
+      draw();
+      return true;
+    } catch { return false; }
+  }
+
+  function newMap(){
+    gridW = parseInt(wEl.value,10);
+    gridH = parseInt(hEl.value,10);
+    cells = new Uint8Array(gridW * gridH);
+    // 初期は未探索で塗っておく
+    cells.fill(TYPE.unknown);
+    notes = {};
+    selected = null;
+    noteBox.value = "";
+    setCanvasSize();
+    draw();
+    saveToLocal();
+  }
+
+  function applyTool(x,y,toolKey){
+    const idx = y*gridW + x;
+    if (toolKey === "erase") cells[idx] = TYPE.empty;
+    else cells[idx] = TYPE[toolKey] ?? TYPE.path;
+    saveToLocal();
+    draw();
+  }
+
+  function pickCellFromEvent(ev){
+    const rect = cv.getBoundingClientRect();
+    const px = ev.clientX - rect.left;
+    const py = ev.clientY - rect.top;
+    const x = Math.floor(px / CELL);
+    const y = Math.floor(py / CELL);
+    if (x<0 || y<0 || x>=gridW || y>=gridH) return null;
+    return {x,y};
+  }
+
+  function updateSelectedUI(){
+    if (!selected) {
+      cellInfo.textContent = "(なし)";
+      noteBox.value = "";
+      return;
+    }
+    const idx = selected.y*gridW + selected.x;
+    const t = TYPE_TO_KEY[cells[idx]] || "empty";
+    cellInfo.innerHTML = `x=${selected.x}, y=${selected.y} / <b>${labels[t] ?? t}</b>`;
+    noteBox.value = notes[keyFor(selected.x, selected.y)] || "";
+  }
+
+  // pointer painting + select
+  let isDragging = false;
+  cv.addEventListener("pointerdown", (ev) => {
+    const c = pickCellFromEvent(ev);
+    if (!c) return;
+    cv.setPointerCapture(ev.pointerId);
+    isDragging = true;
+
+    selected = c;
+    updateSelectedUI();
+
+    applyTool(c.x, c.y, toolSel.value);
+  });
+
+  cv.addEventListener("pointermove", (ev) => {
+    if (!isDragging) return;
+    const c = pickCellFromEvent(ev);
+    if (!c) return;
+    applyTool(c.x, c.y, toolSel.value);
+  });
+
+  cv.addEventListener("pointerup", () => { isDragging = false; });
+  cv.addEventListener("pointercancel", () => { isDragging = false; });
+
+  // buttons
+  document.getElementById("resizeBtn").addEventListener("click", () => {
+    const newW = Math.max(10, Math.min(200, parseInt(wEl.value,10) || 40));
+    const newH = Math.max(10, Math.min(200, parseInt(hEl.value,10) || 30));
+
+    // 既存を可能な範囲でコピー
+    const oldW = gridW, oldH = gridH;
+    const oldCells = cells;
+    const newCells = new Uint8Array(newW * newH);
+    newCells.fill(TYPE.unknown);
+
+    for (let y=0; y<Math.min(oldH,newH); y++){
+      for (let x=0; x<Math.min(oldW,newW); x++){
+        newCells[y*newW + x] = oldCells[y*oldW + x];
+      }
+    }
+
+    // notesも範囲外は削る
+    const newNotes = {};
+    for (const [k,v] of Object.entries(notes)){
+      const [x,y] = k.split(",").map(n=>parseInt(n,10));
+      if (x>=0 && y>=0 && x<newW && y<newH) newNotes[k]=v;
+    }
+
+    gridW = newW; gridH = newH;
+    cells = newCells;
+    notes = newNotes;
+    selected = null;
+    noteBox.value = "";
+    setCanvasSize();
+    draw();
+    saveToLocal();
+    updateSelectedUI();
+  });
+
+  document.getElementById("clearBtn").addEventListener("click", () => {
+    cells.fill(TYPE.unknown);
+    notes = {};
+    selected = null;
+    noteBox.value = "";
+    saveToLocal();
+    draw();
+    updateSelectedUI();
+  });
+
+  document.getElementById("saveNoteBtn").addEventListener("click", () => {
+    if (!selected) return;
+    const k = keyFor(selected.x, selected.y);
+    const t = noteBox.value.trim();
+    if (t) notes[k] = t;
+    else delete notes[k];
+    saveToLocal();
+    draw();
+    updateSelectedUI();
+  });
+
+  document.getElementById("deleteNoteBtn").addEventListener("click", () => {
+    if (!selected) return;
+    delete notes[keyFor(selected.x, selected.y)];
+    noteBox.value = "";
+    saveToLocal();
+    draw();
+    updateSelectedUI();
+  });
+
+  document.getElementById("exportBtn").addEventListener("click", () => {
+    const name = mapNameEl.value.trim() || "default";
+    const payload = {
+      v: 1,
+      name,
+      w: gridW,
+      h: gridH,
+      cells: Array.from(cells),
+      notes
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {type:"application/json"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${name}_maze.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+
+  document.getElementById("pngBtn").addEventListener("click", () => {
+    const tmp = document.createElement("canvas");
+    tmp.width = cv.width; tmp.height = cv.height;
+    const tctx = tmp.getContext("2d");
+    tctx.fillStyle = "#0b0d12";
+    tctx.fillRect(0,0,tmp.width,tmp.height);
+    tctx.drawImage(cv,0,0);
+
+    const a = document.createElement("a");
+    a.href = tmp.toDataURL("image/png");
+    const name = mapNameEl.value.trim() || "default";
+    a.download = `${name}_maze.png`;
+    a.click();
+  });
+
+  document.getElementById("importFile").addEventListener("change", async (ev) => {
+    const f = ev.target.files?.[0];
+    if (!f) return;
+    const text = await f.text();
+    try{
+      const p = JSON.parse(text);
+      gridW = p.w; gridH = p.h;
+      wEl.value = gridW; hEl.value = gridH;
+      cells = new Uint8Array(p.cells);
+      notes = p.notes || {};
+      mapNameEl.value = p.name || mapNameEl.value;
+      selected = null;
+      noteBox.value = "";
+      setCanvasSize();
+      draw();
+      saveToLocal();
+      updateSelectedUI();
+    } catch(e){
+      alert("JSONの読み込みに失敗しました");
+    } finally {
+      ev.target.value = "";
+    }
+  });
+
+  document.getElementById("loadBtn").addEventListener("click", () => {
+    if (!loadFromLocal()) newMap();
+    updateSelectedUI();
+  });
+
+  document.getElementById("newBtn").addEventListener("click", () => {
+    newMap();
+    updateSelectedUI();
+  });
+
+  // init
+  setCanvasSize();
+  if (!loadFromLocal()) newMap();
+  else { draw(); }
+  updateSelectedUI();
+
+  // autosave note typing (selected cell only)
+  let noteTimer = null;
+  noteBox.addEventListener("input", () => {
+    if (!selected) return;
+    clearTimeout(noteTimer);
+    noteTimer = setTimeout(() => {
+      const k = keyFor(selected.x, selected.y);
+      const t = noteBox.value.trim();
+      if (t) notes[k] = t;
+      else delete notes[k];
+      saveToLocal();
+      draw();
+    }, 250);
+  });
+
+})();
+</script>
+
+<!-- Service Worker登録（iOS Safari対応） -->
+<script>
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("./sw.js");
+  }
+</script>
+</body>
+</html>
